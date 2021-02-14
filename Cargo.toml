@@ -1,0 +1,26 @@
+[package]
+name = "grabert-keyb-rs"
+version = "0.1.0"
+authors = ["camrbuss <camrbuss@vt.edu>"]
+edition = "2018"
+
+[dependencies]
+cortex-m = "0.7.1"
+cortex-m-rt = "0.6.13"
+cortex-m-semihosting = "0.3.7"
+cortex-m-rtic = "0.5.5"
+panic-halt = "0.2.0"
+embedded-hal = "0.2.4"
+usb-device = "0.2.7"
+stm32f0xx-hal = {version = "0.17.1", features = ["rt", "stm32f072", "stm32-usbd"]}
+embedded-graphics = "0.6.2"
+ssd1306 = "0.5.1"
+heapless = "0.6.0"
+generic-array = "0.14.4"
+keyberon = { git = "https://github.com/TeXitoi/keyberon",  rev = "0e78ae8529653232f57fb1d54ad18b97995caba8"}
+
+[profile.release]
+lto = true
+incremental = false
+opt-level = "z"
+debug = true
