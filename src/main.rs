@@ -19,12 +19,11 @@ use heapless::consts::*;
 use keyberon::impl_heterogenous_array;
 use keyberon::debounce::Debouncer;
 use keyberon::key_code::{KbHidReport, KeyCode::*};
-use keyberon::action::{k, l, Action::Trans};
-use keyberon::layout::{Event, Layout};
+use keyberon::action::{k, l, Action, Action::Trans};
+use keyberon::layout::Layout;
 use keyberon::matrix::{Matrix, PressedKeys};
 use usb_device::bus::UsbBusAllocator;
 use usb_device::class::UsbClass as _;
-use usb_device::device::UsbDeviceState;
 
 use embedded_graphics::{
     fonts::{Font12x16, Font6x8, Text},
@@ -101,18 +100,25 @@ impl_heterogenous_array! {
 
 // TODO: Develop a better layout
 #[rustfmt::skip]
-pub static LAYERS: keyberon::layout::Layers = &[
+pub static LAYERS: keyberon::layout::Layers<()> = &[
     &[&[
         k(Grave), k(Kb1), k(Kb2), k(Kb3), k(Kb4), k(Kb5), k(Kb6), k(Kb7), k(Kb8), k(Kb9), k(Kb0), k(Minus), k(Equal), k(BSpace), k(BSpace),
         k(Tab), k(Q), k(W), k(E), k(R), k(T), k(Y), k(U), k(I), k(O), k(P), k(LBracket), k(RBracket), k(Bslash),
         k(CapsLock), k(A), k(S), k(D), k(F), k(G), k(H), k(J), k(K), k(L), k(SColon), k(Quote), k(Enter),
         k(LShift), k(LShift), k(Z), k(X), k(C), k(V), k(B), k(N), k(M), k(Comma), k(Dot), k(Slash), k(RShift), k(RShift),
-        k(LCtrl), k(LGui), k(LAlt), k(Space), l(1), k(RAlt), k(RGui), k(RGui), k(RCtrl), k(Q),
+        k(LCtrl), k(LGui), k(LAlt), k(Space), l(1), k(RAlt), k(RAlt), k(RGui), k(RCtrl), k(MediaMute),
     ]],
     &[&[
-        k(Escape),  k(F1), k(F2), k(F3), k(F4), k(F5), k(F6), k(F7), k(F8), k(F9), k(F10), k(F11), k(F12), k(Delete), k(Delete),
-        Trans, Trans, Trans, k(Up), Trans, Trans, Trans, Trans, Trans, Trans, Trans, k(Home), k(End), Trans,
+        k(Escape), k(F1), k(F2), k(F3), k(F4), k(F5), k(F6), k(F7), k(F8), k(F9), k(F10), k(F11), k(F12), k(Delete), k(Delete),
+        Trans, k(MediaSleep), Trans, k(Up), Trans, Trans, Trans, Trans, k(Insert), Trans, k(PScreen), k(Home), k(End), Trans,
         Trans, Trans, k(Left), k(Down), k(Right), Trans, Trans, k(MediaPlayPause), k(MediaNextSong), Trans, k(MediaVolDown), k(MediaVolUp), Trans,
+        Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, k(Up), k(Up),
+        Trans, l(2), Trans, Trans, Trans, k(Left), k(Left), k(Down), k(Right), Trans,
+    ]],
+    &[&[
+        Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans,
+        Trans, Action::Custom(()), Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans,
+        Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans,
         Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans,
         Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans,
     ]],
@@ -129,7 +135,7 @@ const APP: () = {
         small_text_style: TextStyle<BinaryColor, Font6x8>,
         large_text_style: TextStyle<BinaryColor, Font12x16>,
         matrix: Matrix<Cols, Rows>,
-        layout: keyberon::layout::Layout,
+        layout: Layout<()>,
         debouncer: Debouncer<PressedKeys<U1, U66>>,
     }
 
@@ -274,44 +280,30 @@ const APP: () = {
         }
     }
 
-    #[task(priority = 3, capacity = 8, resources = [usb_dev, usb_class, layout])]
-    fn handle_event(mut c: handle_event::Context, event: Option<Event>) {
-        let report: KbHidReport = match event {
-            None => c.resources.layout.tick().collect(),
-            Some(e) => {
-                c.resources.layout.event(e);
-                return;
-            }
-        };
-        if !c
-            .resources
-            .usb_class
-            .lock(|k| k.device_mut().set_keyboard_report(report.clone()))
-        {
-            return;
-        }
-        if c.resources.usb_dev.lock(|d| d.state()) != UsbDeviceState::Configured {
-            return;
-        }
-        while let Ok(0) = c.resources.usb_class.lock(|k| k.write(report.as_bytes())) {}
-    }
-
+    // Code from https://github.com/TeXitoi/keyberon-f4/blob/7c1d84bd9d361f77703128603158beab8856b3a7/src/main.rs#L230
     #[task(
         binds = TIM3,
         priority = 2,
-        spawn = [handle_event],
-        resources = [scan_timer, matrix, debouncer],
+        resources = [scan_timer, matrix, debouncer, layout, usb_dev, usb_class],
     )]
-    fn scan_timer_irq(c: scan_timer_irq::Context) {
+    fn scan_timer_irq(mut c: scan_timer_irq::Context) {
         c.resources.scan_timer.wait().ok();
+
         for event in c
             .resources
             .debouncer
             .events(c.resources.matrix.get().unwrap())
         {
-            c.spawn.handle_event(Some(event)).unwrap();
+            c.resources.layout.event(event);
         }
-        c.spawn.handle_event(None).unwrap();
+        match c.resources.layout.tick() {
+            keyberon::layout::CustomEvent::Release(()) => unsafe {
+                // Enter DFU
+                cortex_m::asm::bootload(0x1FFFC800 as *const u32);
+            },
+            _ => (),
+        }
+        send_report(c.resources.layout.keycodes(), &mut c.resources.usb_class);
     }
 
     // Low Priority OLED update Task
@@ -342,3 +334,14 @@ const APP: () = {
         fn CEC_CAN();
     }
 };
+
+fn send_report(
+    iter: impl Iterator<Item = keyberon::key_code::KeyCode>,
+    usb_class: &mut resources::usb_class<'_>,
+) {
+    use rtic::Mutex;
+    let report: KbHidReport = iter.collect();
+    if usb_class.lock(|k| k.device_mut().set_keyboard_report(report.clone())) {
+        while let Ok(0) = usb_class.lock(|k| k.write(report.as_bytes())) {}
+    }
+}

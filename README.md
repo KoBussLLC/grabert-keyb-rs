@@ -19,5 +19,15 @@ OpenOCD:
 openocd -f "interface/stlink-v2.cfg" -f "target/stm32f0x.cfg" "./target/thumbv6m-none-eabi/release/grabert-keyb-rs"
 ```
 
+Create .bin from elf
+``` sh
+cargo objcopy --bin grabert-keyb-rs --release -- -O binary grabert-keyb-rs.bin
+```
+
+DFU Flash
+``` sh
+dfu-util -a 0 -s 0x08000000:leave -D grabert-keyb-rs.bin
+```
+
 ### License
 MIT

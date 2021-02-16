@@ -17,7 +17,7 @@ embedded-graphics = "0.6.2"
 ssd1306 = "0.5.1"
 heapless = "0.6.0"
 generic-array = "0.14.4"
-keyberon = { git = "https://github.com/TeXitoi/keyberon",  rev = "0e78ae8529653232f57fb1d54ad18b97995caba8"}
+keyberon = {git = "https://github.com/TeXitoi/keyberon", branch="master"}
 
 [profile.release]
 lto = true
