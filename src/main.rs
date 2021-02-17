@@ -131,6 +131,7 @@ const APP: () = {
         usb_class: UsbClass,
         scan_timer: timers::Timer<stm32::TIM3>,
         oled_timer: timers::Timer<stm32::TIM2>,
+        iwdg: hal::watchdog::Watchdog,
         display: Display,
         small_text_style: TextStyle<BinaryColor, Font6x8>,
         large_text_style: TextStyle<BinaryColor, Font12x16>,
@@ -142,6 +143,7 @@ const APP: () = {
     #[init]
     fn init(mut c: init::Context) -> init::LateResources {
         static mut USB_BUS: Option<UsbBusAllocator<usb::UsbBusType>> = None;
+
         let mut rcc = c
             .device
             .RCC
@@ -152,6 +154,12 @@ const APP: () = {
             .pclk(24.mhz())
             .freeze(&mut c.device.FLASH);
 
+        let mut iwdg = hal::watchdog::Watchdog::new(c.device.IWDG);
+        iwdg.start(1.hz());
+
+        // Splitting each Port at once causes power issues
+        // IWDG takes care of any power issues with a reset
+        // after power has stabilized, while keeping enumeration times short
         let gpioa = c.device.GPIOA.split(&mut rcc);
         let gpiob = c.device.GPIOB.split(&mut rcc);
         let gpioc = c.device.GPIOC.split(&mut rcc);
@@ -264,6 +272,7 @@ const APP: () = {
             usb_class,
             scan_timer,
             oled_timer,
+            iwdg,
             display: disp,
             small_text_style,
             large_text_style,
@@ -313,11 +322,11 @@ const APP: () = {
     #[task(
         binds = TIM2,
         priority = 1,
-        resources = [oled_timer, display, &large_text_style],
+        resources = [iwdg, oled_timer, display, &large_text_style],
     )]
     fn oled_timer_irq(c: oled_timer_irq::Context) {
         c.resources.oled_timer.wait().ok();
-
+        c.resources.iwdg.feed();
         c.resources.display.clear();
         Text::new("Grabert\n in Rust!", Point::zero())
             .into_styled(*c.resources.large_text_style)
