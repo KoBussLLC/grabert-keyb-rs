@@ -8,20 +8,20 @@ use panic_halt as _;
 
 use core::convert::Infallible;
 use embedded_hal::digital::v2::{InputPin, OutputPin};
-use stm32f0xx_hal as hal;
 use hal::gpio::{gpioa, gpiob, gpioc, gpiod, gpioe, gpiof, Input, Output, PullUp, PushPull};
 use hal::i2c::I2c;
 use hal::prelude::*;
 use hal::usb;
 use hal::{stm32, timers};
-use rtic::app;
 use heapless::consts::*;
-use keyberon::impl_heterogenous_array;
-use keyberon::debounce::Debouncer;
-use keyberon::key_code::{KbHidReport, KeyCode::*};
 use keyberon::action::{k, l, Action, Action::Trans};
+use keyberon::debounce::Debouncer;
+use keyberon::impl_heterogenous_array;
+use keyberon::key_code::{KbHidReport, KeyCode::*};
 use keyberon::layout::Layout;
 use keyberon::matrix::{Matrix, PressedKeys};
+use rtic::app;
+use stm32f0xx_hal as hal;
 use usb_device::bus::UsbBusAllocator;
 use usb_device::class::UsbClass as _;
 
@@ -50,6 +50,9 @@ type Display = ssd1306::mode::GraphicsMode<
     >,
     ssd1306::displaysize::DisplaySize128x32,
 >;
+
+// This count divided by the OLED update rate is the period
+const OLED_TIMEOUT_COUNT: u32 = 300;
 
 // Giant Column struct allows for all direct pins in a "flat" array
 // See Grabert's hardware repo for pinout
@@ -138,6 +141,7 @@ const APP: () = {
         matrix: Matrix<Cols, Rows>,
         layout: Layout<()>,
         debouncer: Debouncer<PressedKeys<U1, U66>>,
+        oled_timeout_count: u32,
     }
 
     #[init]
@@ -190,6 +194,8 @@ const APP: () = {
             .build();
 
         // TODO: Initialize OLED with some default image
+        disp.clear();
+        disp.flush().unwrap();
 
         let usb = usb::Peripheral {
             usb: c.device.USB,
@@ -279,11 +285,14 @@ const APP: () = {
             matrix: matrix.unwrap(),
             layout: Layout::new(LAYERS),
             debouncer: Debouncer::new(PressedKeys::default(), PressedKeys::default(), 5),
+            oled_timeout_count: 0,
         }
     }
 
-    #[task(binds = USB, priority = 4, resources = [usb_dev, usb_class])]
+    #[task(binds = USB, priority = 4, resources = [usb_dev, usb_class, oled_timeout_count])]
     fn usb_rx(c: usb_rx::Context) {
+        // USB activity resets OLED counter to keep the screen on
+        *c.resources.oled_timeout_count = 0;
         if c.resources.usb_dev.poll(&mut [c.resources.usb_class]) {
             c.resources.usb_class.poll();
         }
@@ -322,16 +331,28 @@ const APP: () = {
     #[task(
         binds = TIM2,
         priority = 1,
-        resources = [iwdg, oled_timer, display, &large_text_style],
+        resources = [iwdg, oled_timer, display, &large_text_style, oled_timeout_count],
     )]
-    fn oled_timer_irq(c: oled_timer_irq::Context) {
+    fn oled_timer_irq(mut c: oled_timer_irq::Context) {
+        static mut OLED_ON: bool = false;
         c.resources.oled_timer.wait().ok();
         c.resources.iwdg.feed();
+
+        c.resources.oled_timeout_count.lock(|oled_timeout_count| {
+            *oled_timeout_count += 1;
+            if *oled_timeout_count > OLED_TIMEOUT_COUNT {
+                *OLED_ON = false;
+            } else {
+                *OLED_ON = true;
+            }
+        });
         c.resources.display.clear();
-        Text::new("Grabert\n in Rust!", Point::zero())
-            .into_styled(*c.resources.large_text_style)
-            .draw(c.resources.display)
-            .unwrap();
+        if *OLED_ON {
+            Text::new("Grabert\n in Rust!", Point::zero())
+                .into_styled(*c.resources.large_text_style)
+                .draw(c.resources.display)
+                .unwrap();
+        }
         c.resources.display.flush().unwrap();
     }
 
