@@ -244,6 +244,7 @@ dependencies = [
  "heapless 0.6.0",
  "keyberon",
  "panic-halt",
+ "rotary-encoder-hal",
  "ssd1306",
  "stm32f0xx-hal",
  "usb-device",
@@ -355,6 +356,16 @@ name = "r0"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2a38df5b15c8d5c7e8654189744d8e396bddc18ad48041a500ce52d6948941f"
+
+[[package]]
+name = "rotary-encoder-hal"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "30ea00b55c08c8c0d621d36739e0c74676ebd57324098bf32285a049da37d363"
+dependencies = [
+ "either",
+ "embedded-hal",
+]
 
 [[package]]
 name = "rtic-core"

@@ -15,6 +15,7 @@ usb-device = "0.2.7"
 stm32f0xx-hal = {version = "0.17.1", features = ["rt", "stm32f072", "stm32-usbd"]}
 embedded-graphics = "0.6.2"
 ssd1306 = "0.5.1"
+rotary-encoder-hal = "0.3.0"
 heapless = "0.6.0"
 generic-array = "0.14.4"
 keyberon = {git = "https://github.com/TeXitoi/keyberon", branch="master"}

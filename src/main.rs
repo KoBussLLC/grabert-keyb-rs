@@ -7,6 +7,13 @@
 use panic_halt as _;
 
 use core::convert::Infallible;
+
+use embedded_graphics::{
+    pixelcolor::BinaryColor,
+    prelude::*,
+    primitives::Rectangle,
+    style::{PrimitiveStyle, PrimitiveStyleBuilder},
+};
 use embedded_hal::digital::v2::{InputPin, OutputPin};
 use hal::gpio::{gpioa, gpiob, gpioc, gpiod, gpioe, gpiof, Input, Output, PullUp, PushPull};
 use hal::i2c::I2c;
@@ -20,19 +27,12 @@ use keyberon::impl_heterogenous_array;
 use keyberon::key_code::{KbHidReport, KeyCode::*};
 use keyberon::layout::Layout;
 use keyberon::matrix::{Matrix, PressedKeys};
+use rotary_encoder_hal::{Direction, Rotary};
 use rtic::app;
+use ssd1306::{prelude::*, Builder, I2CDIBuilder};
 use stm32f0xx_hal as hal;
 use usb_device::bus::UsbBusAllocator;
 use usb_device::class::UsbClass as _;
-
-use embedded_graphics::{
-    pixelcolor::BinaryColor,
-    prelude::*,
-    primitives::Rectangle,
-    style::{PrimitiveStyle, PrimitiveStyleBuilder},
-};
-use ssd1306::{prelude::*, Builder, I2CDIBuilder};
-
 type UsbClass = keyberon::Class<'static, usb::UsbBusType, ()>;
 type UsbDevice = usb_device::device::UsbDevice<'static, usb::UsbBusType>;
 type Display = ssd1306::mode::GraphicsMode<
@@ -108,21 +108,21 @@ pub static LAYERS: keyberon::layout::Layers<()> = &[
         k(Tab), k(Q), k(W), k(E), k(R), k(T), k(Y), k(U), k(I), k(O), k(P), k(LBracket), k(RBracket), k(Bslash),
         k(CapsLock), k(A), k(S), k(D), k(F), k(G), k(H), k(J), k(K), k(L), k(SColon), k(Quote), k(Enter),
         k(LShift), k(LShift), k(Z), k(X), k(C), k(V), k(B), k(N), k(M), k(Comma), k(Dot), k(Slash), k(RShift), k(RShift),
-        k(LCtrl), k(LGui), k(LAlt), k(Space), l(1), k(RAlt), k(RAlt), k(RGui), k(RCtrl), k(MediaMute),
+        k(LCtrl), k(LGui), k(LAlt), k(Space), l(1), k(RAlt), k(RAlt), k(RGui), k(RCtrl), k(MediaMute), k(MediaVolDown), k(MediaVolUp),
     ]],
     &[&[
         k(Escape), k(F1), k(F2), k(F3), k(F4), k(F5), k(F6), k(F7), k(F8), k(F9), k(F10), k(F11), k(F12), k(Delete), k(Delete),
         Trans, k(MediaSleep), Trans, k(Up), Trans, Trans, Trans, Trans, k(Insert), Trans, k(PScreen), k(Home), k(End), Trans,
         Trans, Trans, k(Left), k(Down), k(Right), Trans, Trans, k(MediaPlayPause), k(MediaNextSong), Trans, k(MediaVolDown), k(MediaVolUp), Trans,
         Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, k(Up), k(Up),
-        Trans, l(2), Trans, Trans, Trans, k(Left), k(Left), k(Down), k(Right), Trans,
+        Trans, l(2), Trans, Trans, Trans, k(Left), k(Left), k(Down), k(Right), Trans, Trans, Trans
     ]],
     &[&[
         Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans,
         Trans, Action::Custom(()), Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans,
         Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans,
         Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans,
-        Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans,
+        Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans, Trans
     ]],
 ];
 
@@ -141,6 +141,7 @@ const APP: () = {
         layout: Layout<()>,
         debouncer: Debouncer<PressedKeys<U1, U66>>,
         oled_timeout_count: u32,
+        encoder: Rotary<gpioc::PC9<Input<PullUp>>, gpioa::PA8<Input<PullUp>>>,
     }
 
     #[init]
@@ -184,6 +185,13 @@ const APP: () = {
             .connect(i2c_interface)
             .into();
         disp.init().unwrap();
+
+        let pc9 = gpioc.pc9;
+        let pa8 = gpioa.pa8;
+        let (pina, pinb) = cortex_m::interrupt::free(move |cs| {
+            (pc9.into_pull_up_input(cs), pa8.into_pull_up_input(cs))
+        });
+        let encoder = Rotary::new(pina, pinb);
 
         let filled_rect_style = PrimitiveStyleBuilder::new()
             .fill_color(BinaryColor::On)
@@ -286,6 +294,7 @@ const APP: () = {
             layout: Layout::new(LAYERS),
             debouncer: Debouncer::new(PressedKeys::default(), PressedKeys::default(), 5),
             oled_timeout_count: 0,
+            encoder,
         }
     }
 
@@ -302,10 +311,44 @@ const APP: () = {
     #[task(
         binds = TIM3,
         priority = 2,
-        resources = [scan_timer, matrix, debouncer, layout, usb_dev, usb_class],
+        resources = [scan_timer, matrix, debouncer, layout, encoder, usb_dev, usb_class],
     )]
     fn scan_timer_irq(mut c: scan_timer_irq::Context) {
+        static mut RESOLUTION_COUNT: u8 = 0;
         c.resources.scan_timer.wait().ok();
+
+        // Read the encoder pins through an update()
+        // Then if 4 increments have occured (one physical click),
+        // press and release the "buttons" in the layout
+        match c.resources.encoder.update().unwrap() {
+            Direction::Clockwise => {
+                if *RESOLUTION_COUNT == 3 {
+                    c.resources
+                        .layout
+                        .event(keyberon::layout::Event::Press(0, 66));
+                    c.resources
+                        .layout
+                        .event(keyberon::layout::Event::Release(0, 66));
+                    *RESOLUTION_COUNT = 0;
+                } else {
+                    *RESOLUTION_COUNT += 1;
+                }
+            }
+            Direction::CounterClockwise => {
+                if *RESOLUTION_COUNT == 3 {
+                    c.resources
+                        .layout
+                        .event(keyberon::layout::Event::Press(0, 67));
+                    c.resources
+                        .layout
+                        .event(keyberon::layout::Event::Release(0, 67));
+                    *RESOLUTION_COUNT = 0;
+                } else {
+                    *RESOLUTION_COUNT += 1;
+                }
+            }
+            Direction::None => {}
+        }
 
         for event in c
             .resources
@@ -438,9 +481,6 @@ const APP: () = {
         }
         c.resources.display.flush().unwrap();
     }
-
-    // TODO: Implement rotary encoder task on PortA and C
-    // Use rotary-encoder-hal = "0.3.0"
 
     // Interrupts for rtic "software" tasks
     extern "C" {
