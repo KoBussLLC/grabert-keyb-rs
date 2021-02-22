@@ -26,11 +26,10 @@ use usb_device::bus::UsbBusAllocator;
 use usb_device::class::UsbClass as _;
 
 use embedded_graphics::{
-    fonts::{Font12x16, Font6x8, Text},
     pixelcolor::BinaryColor,
     prelude::*,
-    style::TextStyle,
-    style::TextStyleBuilder,
+    primitives::Rectangle,
+    style::{PrimitiveStyle, PrimitiveStyleBuilder},
 };
 use ssd1306::{prelude::*, Builder, I2CDIBuilder};
 
@@ -136,8 +135,8 @@ const APP: () = {
         oled_timer: timers::Timer<stm32::TIM2>,
         iwdg: hal::watchdog::Watchdog,
         display: Display,
-        small_text_style: TextStyle<BinaryColor, Font6x8>,
-        large_text_style: TextStyle<BinaryColor, Font12x16>,
+        filled_rect_style: PrimitiveStyle<BinaryColor>,
+        stroke_rect_style: PrimitiveStyle<BinaryColor>,
         matrix: Matrix<Cols, Rows>,
         layout: Layout<()>,
         debouncer: Debouncer<PressedKeys<U1, U66>>,
@@ -186,11 +185,12 @@ const APP: () = {
             .into();
         disp.init().unwrap();
 
-        let small_text_style = TextStyleBuilder::new(Font6x8)
-            .text_color(BinaryColor::On)
+        let filled_rect_style = PrimitiveStyleBuilder::new()
+            .fill_color(BinaryColor::On)
             .build();
-        let large_text_style = TextStyleBuilder::new(Font12x16)
-            .text_color(BinaryColor::On)
+        let stroke_rect_style = PrimitiveStyleBuilder::new()
+            .stroke_color(BinaryColor::On)
+            .stroke_width(1)
             .build();
 
         // TODO: Initialize OLED with some default image
@@ -280,8 +280,8 @@ const APP: () = {
             oled_timer,
             iwdg,
             display: disp,
-            small_text_style,
-            large_text_style,
+            filled_rect_style,
+            stroke_rect_style,
             matrix: matrix.unwrap(),
             layout: Layout::new(LAYERS),
             debouncer: Debouncer::new(PressedKeys::default(), PressedKeys::default(), 5),
@@ -326,16 +326,84 @@ const APP: () = {
 
     // Low Priority OLED update Task
     // TODO: Determine if i2c calls are blocking
-    // TODO: Implement OLED timeout to prevent burn-in
-    // TODO: Add useful features to OLED
     #[task(
         binds = TIM2,
         priority = 1,
-        resources = [iwdg, oled_timer, display, &large_text_style, oled_timeout_count],
+        resources = [iwdg, oled_timer, display, &filled_rect_style, &stroke_rect_style, oled_timeout_count, debouncer],
     )]
     fn oled_timer_irq(mut c: oled_timer_irq::Context) {
         static mut OLED_ON: bool = false;
-        c.resources.oled_timer.wait().ok();
+        static mut PRESSED: [bool; 66] = [false; 66];
+        // TODO make the keymap image generated in a const fn
+        static mut SQUARES: [Rectangle; 66] = [
+            Rectangle::new(Point::new(4, 2), Point::new(11, 7)),
+            Rectangle::new(Point::new(11, 2), Point::new(18, 7)),
+            Rectangle::new(Point::new(18, 2), Point::new(25, 7)),
+            Rectangle::new(Point::new(25, 2), Point::new(32, 7)),
+            Rectangle::new(Point::new(32, 2), Point::new(39, 7)),
+            Rectangle::new(Point::new(39, 2), Point::new(46, 7)),
+            Rectangle::new(Point::new(46, 2), Point::new(53, 7)),
+            Rectangle::new(Point::new(53, 2), Point::new(60, 7)),
+            Rectangle::new(Point::new(60, 2), Point::new(67, 7)),
+            Rectangle::new(Point::new(67, 2), Point::new(74, 7)),
+            Rectangle::new(Point::new(74, 2), Point::new(81, 7)),
+            Rectangle::new(Point::new(81, 2), Point::new(88, 7)),
+            Rectangle::new(Point::new(88, 2), Point::new(95, 7)),
+            Rectangle::new(Point::new(95, 2), Point::new(102, 7)),
+            Rectangle::new(Point::new(102, 2), Point::new(109, 7)),
+            Rectangle::new(Point::new(4, 7), Point::new(15, 13)),
+            Rectangle::new(Point::new(15, 7), Point::new(22, 13)),
+            Rectangle::new(Point::new(22, 7), Point::new(29, 13)),
+            Rectangle::new(Point::new(29, 7), Point::new(36, 13)),
+            Rectangle::new(Point::new(36, 7), Point::new(43, 13)),
+            Rectangle::new(Point::new(43, 7), Point::new(50, 13)),
+            Rectangle::new(Point::new(50, 7), Point::new(57, 13)),
+            Rectangle::new(Point::new(57, 7), Point::new(64, 13)),
+            Rectangle::new(Point::new(64, 7), Point::new(71, 13)),
+            Rectangle::new(Point::new(71, 7), Point::new(78, 13)),
+            Rectangle::new(Point::new(78, 7), Point::new(85, 13)),
+            Rectangle::new(Point::new(85, 7), Point::new(92, 13)),
+            Rectangle::new(Point::new(92, 7), Point::new(99, 13)),
+            Rectangle::new(Point::new(99, 7), Point::new(109, 13)),
+            Rectangle::new(Point::new(4, 13), Point::new(17, 19)),
+            Rectangle::new(Point::new(17, 13), Point::new(24, 19)),
+            Rectangle::new(Point::new(24, 13), Point::new(31, 19)),
+            Rectangle::new(Point::new(31, 13), Point::new(38, 19)),
+            Rectangle::new(Point::new(38, 13), Point::new(45, 19)),
+            Rectangle::new(Point::new(45, 13), Point::new(52, 19)),
+            Rectangle::new(Point::new(52, 13), Point::new(59, 19)),
+            Rectangle::new(Point::new(59, 13), Point::new(66, 19)),
+            Rectangle::new(Point::new(66, 13), Point::new(73, 19)),
+            Rectangle::new(Point::new(73, 13), Point::new(80, 19)),
+            Rectangle::new(Point::new(80, 13), Point::new(87, 19)),
+            Rectangle::new(Point::new(87, 13), Point::new(94, 19)),
+            Rectangle::new(Point::new(94, 13), Point::new(109, 19)),
+            Rectangle::new(Point::new(4, 19), Point::new(13, 25)),
+            Rectangle::new(Point::new(13, 19), Point::new(20, 25)),
+            Rectangle::new(Point::new(20, 19), Point::new(27, 25)),
+            Rectangle::new(Point::new(27, 19), Point::new(34, 25)),
+            Rectangle::new(Point::new(34, 19), Point::new(41, 25)),
+            Rectangle::new(Point::new(41, 19), Point::new(48, 25)),
+            Rectangle::new(Point::new(48, 19), Point::new(55, 25)),
+            Rectangle::new(Point::new(55, 19), Point::new(62, 25)),
+            Rectangle::new(Point::new(62, 19), Point::new(69, 25)),
+            Rectangle::new(Point::new(69, 19), Point::new(76, 25)),
+            Rectangle::new(Point::new(76, 19), Point::new(83, 25)),
+            Rectangle::new(Point::new(83, 19), Point::new(90, 25)),
+            Rectangle::new(Point::new(90, 19), Point::new(102, 25)),
+            Rectangle::new(Point::new(102, 19), Point::new(109, 25)),
+            Rectangle::new(Point::new(4, 25), Point::new(13, 31)),
+            Rectangle::new(Point::new(13, 25), Point::new(22, 31)),
+            Rectangle::new(Point::new(22, 25), Point::new(31, 31)),
+            Rectangle::new(Point::new(31, 25), Point::new(74, 31)),
+            Rectangle::new(Point::new(74, 25), Point::new(81, 31)),
+            Rectangle::new(Point::new(81, 25), Point::new(88, 31)),
+            Rectangle::new(Point::new(88, 25), Point::new(95, 31)),
+            Rectangle::new(Point::new(95, 25), Point::new(102, 31)),
+            Rectangle::new(Point::new(102, 25), Point::new(109, 31)),
+            Rectangle::new(Point::new(117, 2), Point::new(122, 7)),
+        ];
+
         c.resources.iwdg.feed();
 
         c.resources.oled_timeout_count.lock(|oled_timeout_count| {
@@ -348,10 +416,25 @@ const APP: () = {
         });
         c.resources.display.clear();
         if *OLED_ON {
-            Text::new("Grabert\n in Rust!", Point::zero())
-                .into_styled(*c.resources.large_text_style)
-                .draw(c.resources.display)
-                .unwrap();
+            *PRESSED = [false; 66];
+            c.resources.debouncer.lock(|debaser| {
+                for switch in debaser.get().iter_pressed() {
+                    PRESSED[switch.1] = true;
+                }
+            });
+            for (idx, is_pressed) in PRESSED.iter().enumerate() {
+                if *is_pressed {
+                    SQUARES[idx]
+                        .into_styled(*c.resources.filled_rect_style)
+                        .draw(c.resources.display)
+                        .unwrap();
+                } else {
+                    SQUARES[idx]
+                        .into_styled(*c.resources.stroke_rect_style)
+                        .draw(c.resources.display)
+                        .unwrap();
+                }
+            }
         }
         c.resources.display.flush().unwrap();
     }
