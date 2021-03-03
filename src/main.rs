@@ -21,7 +21,7 @@ use hal::prelude::*;
 use hal::usb;
 use hal::{stm32, timers};
 use heapless::consts::*;
-use keyberon::action::{k, l, Action, Action::Trans};
+use keyberon::action::{k, l, Action, Action::Trans, HoldTapConfig};
 use keyberon::debounce::Debouncer;
 use keyberon::impl_heterogenous_array;
 use keyberon::key_code::{KbHidReport, KeyCode::*};
@@ -31,9 +31,10 @@ use rotary_encoder_hal::{Direction, Rotary};
 use rtic::app;
 use ssd1306::{prelude::*, Builder, I2CDIBuilder};
 use stm32f0xx_hal as hal;
+use core::sync::atomic::{AtomicBool, Ordering};
 use usb_device::bus::UsbBusAllocator;
 use usb_device::class::UsbClass as _;
-type UsbClass = keyberon::Class<'static, usb::UsbBusType, ()>;
+type UsbClass = keyberon::Class<'static, usb::UsbBusType, CapsLock>;
 type UsbDevice = usb_device::device::UsbDevice<'static, usb::UsbBusType>;
 type Display = ssd1306::mode::GraphicsMode<
     ssd1306::prelude::I2CInterface<
@@ -52,6 +53,35 @@ type Display = ssd1306::mode::GraphicsMode<
 
 // This count divided by the OLED update rate is the period
 const OLED_TIMEOUT_COUNT: u32 = 300;
+
+const SHIFT_UP: Action<()> = Action::HoldTap {
+    timeout: 200,
+    config: HoldTapConfig::HoldOnOtherKeyPress,
+    tap_hold_interval: 0,
+    hold: &k(RShift),
+    tap: &k(Up),
+};
+const CTRL_RIGHT: Action<()> = Action::HoldTap {
+    timeout: 200,
+    config: HoldTapConfig::HoldOnOtherKeyPress,
+    tap_hold_interval: 0,
+    hold: &k(RCtrl),
+    tap: &k(Right),
+};
+const GUI_DOWN: Action<()> = Action::HoldTap {
+    timeout: 200,
+    config: HoldTapConfig::HoldOnOtherKeyPress,
+    tap_hold_interval: 0,
+    hold: &k(RGui),
+    tap: &k(Down),
+};
+const ALT_LEFT: Action<()> = Action::HoldTap {
+    timeout: 200,
+    config: HoldTapConfig::HoldOnOtherKeyPress,
+    tap_hold_interval: 0,
+    hold: &k(RAlt),
+    tap: &k(Left),
+};
 
 // Giant Column struct allows for all direct pins in a "flat" array
 // See Grabert's hardware repo for pinout
@@ -100,6 +130,14 @@ impl_heterogenous_array! {
     [0]
 }
 
+static CAPS_LOCK: AtomicBool = AtomicBool::new(false);
+pub struct CapsLock {}
+impl keyberon::keyboard::Leds for CapsLock {
+    fn caps_lock(&mut self, status: bool) {
+        CAPS_LOCK.store(status, Ordering::Relaxed);
+    }
+}
+
 // TODO: Develop a better layout
 #[rustfmt::skip]
 pub static LAYERS: keyberon::layout::Layers<()> = &[
@@ -107,8 +145,8 @@ pub static LAYERS: keyberon::layout::Layers<()> = &[
         k(Grave), k(Kb1), k(Kb2), k(Kb3), k(Kb4), k(Kb5), k(Kb6), k(Kb7), k(Kb8), k(Kb9), k(Kb0), k(Minus), k(Equal), k(BSpace), k(BSpace),
         k(Tab), k(Q), k(W), k(E), k(R), k(T), k(Y), k(U), k(I), k(O), k(P), k(LBracket), k(RBracket), k(Bslash),
         k(CapsLock), k(A), k(S), k(D), k(F), k(G), k(H), k(J), k(K), k(L), k(SColon), k(Quote), k(Enter),
-        k(LShift), k(LShift), k(Z), k(X), k(C), k(V), k(B), k(N), k(M), k(Comma), k(Dot), k(Slash), k(RShift), k(RShift),
-        k(LCtrl), k(LGui), k(LAlt), k(Space), l(1), k(RAlt), k(RAlt), k(RGui), k(RCtrl), k(MediaMute), k(MediaVolDown), k(MediaVolUp),
+        k(LShift), k(LShift), k(Z), k(X), k(C), k(V), k(B), k(N), k(M), k(Comma), k(Dot), k(Slash), SHIFT_UP, k(Up),
+        k(LCtrl), k(LGui), k(LAlt), k(Space), l(1), ALT_LEFT, ALT_LEFT, GUI_DOWN, CTRL_RIGHT, k(MediaMute), k(MediaVolDown), k(MediaVolUp),
     ]],
     &[&[
         k(Escape), k(F1), k(F2), k(F3), k(F4), k(F5), k(F6), k(F7), k(F8), k(F9), k(F10), k(F11), k(F12), k(Delete), k(Delete),
@@ -205,6 +243,7 @@ const APP: () = {
         disp.clear();
         disp.flush().unwrap();
 
+        let caps_lock = CapsLock {};
         let usb = usb::Peripheral {
             usb: c.device.USB,
             pin_dm: gpioa.pa11,
@@ -212,7 +251,7 @@ const APP: () = {
         };
         *USB_BUS = Some(usb::UsbBusType::new(usb));
         let usb_bus = USB_BUS.as_ref().unwrap();
-        let usb_class = keyberon::new_class(usb_bus, ());
+        let usb_class = keyberon::new_class(usb_bus, caps_lock);
         let usb_dev = keyberon::new_device(usb_bus);
 
         // Prevent port move
@@ -477,6 +516,12 @@ const APP: () = {
                         .draw(c.resources.display)
                         .unwrap();
                 }
+            }
+            if CAPS_LOCK.load(Ordering::Relaxed) {
+                SQUARES[29]
+                    .into_styled(*c.resources.filled_rect_style)
+                    .draw(c.resources.display)
+                    .unwrap();
             }
         }
         c.resources.display.flush().unwrap();
